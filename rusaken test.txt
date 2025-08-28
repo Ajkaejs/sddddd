@@ -1,0 +1,444 @@
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local TeleportService = game:GetService("TeleportService")
+local OrionLib = loadstring(game:HttpGet('https://raw.githubusercontent.com/Ajkaejs/Orion-2/refs/heads/main/source'))()
+
+-- Создаем главное окно GUI
+local Window = OrionLib:MakeWindow({
+    Name = "Rusaken GUI",
+    HidePremium = false, 
+    SaveConfig = false, 
+    ConfigFolder = "OrionTest",
+    IntroEnabled = false
+})
+
+-- Вкладка для телепортации
+local TeleportTab = Window:MakeTab({
+    Name = "Teleport",
+    Icon = "rbxassetid://4483345998",
+    PremiumOnly = false
+})
+
+-- Вкладка для визуальных эффектов
+local VisualTab = Window:MakeTab({
+    Name = "Visual",
+    Icon = "rbxassetid://4483345998",
+    PremiumOnly = false
+})
+
+-- Создаём папку и платформу
+local teleportFolder = Instance.new("Folder", workspace)
+teleportFolder.Name = "TeleportSystem"
+
+local teleportPart = Instance.new("Part", teleportFolder)
+teleportPart.Size = Vector3.new(10, 1, 10)
+teleportPart.Anchored = true
+teleportPart.CanCollide = true
+teleportPart.Transparency = 0.5
+teleportPart.Color = Color3.fromRGB(0, 170, 255)
+teleportPart.Name = "TeleportPlatform"
+
+-- Переменные для состояний
+local targetPlayer = nil
+local playerAutoTeleport = false
+local teleportConnections = {}
+local currentTweens = {}
+local speedEnabled = false
+local currentSpeed = 16
+local autoFixEnabled = false
+local autoFixConnection = nil
+local highlightAllEnabled = false
+local highlightInstances = {}
+
+-- Список специальных имен персонажей
+local SPECIAL_NAMES = {
+    "1x1x1x1",
+    "Noli",
+    "Jason",
+    "JohnDoe",
+    "c00lkidd"
+}
+
+-- Функция для проверки специального имени
+local function isSpecialName(character)
+    for _, name in ipairs(SPECIAL_NAMES) do
+        if character.Name == name then
+            return true
+        end
+    end
+    return false
+end
+
+-- Функция для телепортации в другой плейс
+local function TeleportToPlace()
+    local placeId = 84074827881236
+    local success, errorMsg = pcall(function()
+        TeleportService:Teleport(placeId, LocalPlayer)
+    end)
+    
+    if not success then
+        OrionLib:MakeNotification({
+            Name = "Ошибка телепортации",
+            Content = "Не удалось телепортироваться: "..tostring(errorMsg),
+            Time = 5
+        })
+    end
+end
+
+-- Функция для фикса генератора
+local function fixfullgen()
+    workspace.Map.Ingame.Map.Generator.Remotes.RE:FireServer()
+    workspace.Map.Ingame.Map.Generator.Remotes.RE:FireServer()
+    workspace.Map.Ingame.Map.Generator.Remotes.RE:FireServer()
+    workspace.Map.Ingame.Map.Generator.Remotes.RE:FireServer()
+end
+
+-- Функция для проверки наличия PuzzleUI
+local function hasPuzzleUI()
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if playerGui then
+        return playerGui:FindFirstChild("PuzzleUI") and playerGui.PuzzleUI:FindFirstChild("Container")
+    end
+    return false
+end
+
+-- Функция для установки скорости
+local function SetPlayerSpeed()
+    if not LocalPlayer.Character then return end
+    
+    local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        if speedEnabled then
+            humanoid:SetAttribute("BaseSpeed", currentSpeed)
+            humanoid.WalkSpeed = currentSpeed
+        else
+            humanoid:SetAttribute("BaseSpeed", nil)
+            humanoid.WalkSpeed = 16
+        end
+    end
+end
+
+-- Функция для добавления Highlight игроку с отслеживанием изменений
+local function AddHighlightToPlayer(player)
+    if not player.Character then return end
+    
+    -- Удаляем старый Highlight если есть
+    if highlightInstances[player] then
+        RemoveHighlightFromPlayer(player)
+    end
+    
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "PlayerHighlight"
+    
+    -- Функция для обновления цвета
+    local function updateHighlightColor()
+        if not highlight or not highlight.Parent then return end
+        
+        local isKiller = workspace.Players:FindFirstChild("Killers") and 
+                         workspace.Players.Killers:FindFirstChild(player.Name)
+        local isSpecial = isSpecialName(player.Character)
+        
+        if isKiller or isSpecial then
+            highlight.FillColor = Color3.fromRGB(255, 0, 0) -- Красный для киллеров и особых имен
+            highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
+        else
+            highlight.FillColor = Color3.fromRGB(0, 255, 0) -- Зеленый для обычных
+            highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+        end
+    end
+    
+    highlight.Parent = player.Character
+    highlightInstances[player] = {
+        highlight = highlight,
+        connections = {}
+    }
+    
+    -- Проверяем сразу при создании
+    updateHighlightColor()
+    
+    -- Отслеживаем изменения в папке Killers
+    local killFolder = workspace.Players:FindFirstChild("Killers")
+    if killFolder then
+        highlightInstances[player].connections.killerAdded = killFolder.ChildAdded:Connect(function(child)
+            if child.Name == player.Name then
+                updateHighlightColor()
+            end
+        end)
+        
+        highlightInstances[player].connections.killerRemoved = killFolder.ChildRemoved:Connect(function(child)
+            if child.Name == player.Name then
+                updateHighlightColor()
+            end
+        end)
+    end
+    
+    -- Отслеживаем появление нового персонажа
+    highlightInstances[player].connections.characterAdded = player.CharacterAdded:Connect(function(character)
+        highlight.Parent = character
+        task.wait(0.5) -- Даем время для загрузки персонажа
+        updateHighlightColor()
+    end)
+    
+    -- Отслеживаем изменение имени персонажа
+    highlightInstances[player].connections.nameChanged = player.Character:GetPropertyChangedSignal("Name"):Connect(function()
+        updateHighlightColor()
+    end)
+end
+
+-- Функция для удаления Highlight у игрока
+local function RemoveHighlightFromPlayer(player)
+    if highlightInstances[player] then
+        -- Отключаем все соединения
+        for _, connection in pairs(highlightInstances[player].connections) do
+            connection:Disconnect()
+        end
+        
+        -- Удаляем Highlight
+        if highlightInstances[player].highlight and highlightInstances[player].highlight.Parent then
+            highlightInstances[player].highlight:Destroy()
+        end
+        
+        highlightInstances[player] = nil
+    end
+end
+
+-- Функция для управления Highlight всех игроков
+local function ManageAllHighlights()
+    for _, player in ipairs(Players:GetPlayers()) do
+        if highlightAllEnabled then
+            AddHighlightToPlayer(player)
+        else
+            RemoveHighlightFromPlayer(player)
+        end
+    end
+end
+
+-- Обновляем позицию платформы
+function UpdateTeleportPartPosition()
+    if not LocalPlayer.Character then return end
+    
+    local humanoidRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if humanoidRoot then
+        teleportPart.CFrame = humanoidRoot.CFrame + Vector3.new(0, 50, 0)
+    end
+end
+
+-- Телепортация к платформе (по кнопке)
+function TeleportToPlatform()
+    if not LocalPlayer.Character then return end
+    
+    local humanoidRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if humanoidRoot and teleportPart then
+        if currentTweens.platform then
+            currentTweens.platform:Cancel()
+        end
+        
+        local targetCFrame = teleportPart.CFrame + Vector3.new(0, 5, 0)
+        local tweenInfo = TweenInfo.new(0.0000000000000001, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        
+        currentTweens.platform = TweenService:Create(humanoidRoot, tweenInfo, {CFrame = targetCFrame})
+        currentTweens.platform:Play()
+    end
+end
+
+-- Телепортация к игроку (автоматическая)
+function SmoothTeleportToPlayer()
+    if not targetPlayer or not targetPlayer.Character then return end
+    
+    local targetRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local localRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    
+    if targetRoot and localRoot then
+        if currentTweens.player then
+            currentTweens.player:Cancel()
+        end
+        
+        local teleportCFrame = targetRoot.CFrame * CFrame.new(0, 0.5, 2)
+        local tweenInfo = TweenInfo.new(0.0000000000000001, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+        
+        currentTweens.player = TweenService:Create(localRoot, tweenInfo, {CFrame = teleportCFrame})
+        currentTweens.player:Play()
+    end
+end
+
+-- Управление подключениями для авто-телепортации
+function ManagePlayerTeleport()
+    for _, conn in pairs(teleportConnections) do
+        conn:Disconnect()
+    end
+    teleportConnections = {}
+
+    if playerAutoTeleport and targetPlayer then
+        table.insert(teleportConnections, RunService.Heartbeat:Connect(function()
+            pcall(SmoothTeleportToPlayer)
+        end))
+    end
+end
+
+-- Управление автофиксом
+function ManageAutoFix()
+    if autoFixConnection then
+        autoFixConnection:Disconnect()
+        autoFixConnection = nil
+    end
+    
+    if autoFixEnabled then
+        autoFixConnection = RunService.Heartbeat:Connect(function()
+            if hasPuzzleUI() then
+                pcall(fixfullgen)
+            end
+        end)
+    end
+end
+
+-- GUI элементы для вкладки Teleport
+local PlayerDropdown = TeleportTab:AddDropdown({
+    Name = "Выберите игрока",
+    Default = "Не выбран",
+    Options = {"Не выбран"},
+    Callback = function(selectedPlayerName)
+        targetPlayer = Players:FindFirstChild(selectedPlayerName)
+        if playerAutoTeleport then
+            ManagePlayerTeleport()
+        end
+    end    
+})
+
+TeleportTab:AddButton({
+    Name = "Телепорт к платформе",
+    Callback = function()
+        UpdateTeleportPartPosition()
+        TeleportToPlatform()
+    end    
+})
+
+TeleportTab:AddToggle({
+    Name = "Авто-телепорт к игроку",
+    Default = false,
+    Callback = function(Value)
+        playerAutoTeleport = Value
+        ManagePlayerTeleport()
+    end    
+})
+
+TeleportTab:AddTextbox({
+    Name = "Скорость (BaseSpeed)",
+    Default = "16",
+    TextDisappear = false,
+    Callback = function(Value)
+        local num = tonumber(Value)
+        if num and num >= 0 and num <= 200 then
+            currentSpeed = num
+            if speedEnabled then
+                SetPlayerSpeed()
+            end
+        else
+            OrionLib:MakeNotification({
+                Name = "Ошибка",
+                Content = "Введите число от 0 до 200",
+                Time = 3
+            })
+        end
+    end
+})
+
+TeleportTab:AddToggle({
+    Name = "Изменить скорость",
+    Default = false,
+    Callback = function(Value)
+        speedEnabled = Value
+        SetPlayerSpeed()
+        
+        if Value then
+            LocalPlayer.CharacterAdded:Connect(function(character)
+                character:WaitForChild("Humanoid")
+                SetPlayerSpeed()
+            end)
+        end
+    end    
+})
+
+TeleportTab:AddToggle({
+    Name = "Авто-фикс генератора (при PuzzleUI)",
+    Default = false,
+    Callback = function(Value)
+        autoFixEnabled = Value
+        ManageAutoFix()
+    end    
+})
+
+-- GUI элементы для вкладки Visual
+VisualTab:AddToggle({
+    Name = "Highlight всех игроков",
+    Default = false,
+    Callback = function(Value)
+        highlightAllEnabled = Value
+        ManageAllHighlights()
+    end    
+})
+
+VisualTab:AddButton({
+    Name = "Телепорт в плейс (84074827881236)",
+    Callback = function()
+        OrionLib:MakeNotification({
+            Name = "Телепортация",
+            Content = "Попытка телепортации в плейс 84074827881236...",
+            Time = 3
+        })
+        TeleportToPlace()
+    end    
+})
+
+-- Функции для работы с игроками
+function GetPlayerNames()
+    local playerNames = {"Не выбран"}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            table.insert(playerNames, player.Name)
+        end
+    end
+    return playerNames
+end
+
+function UpdatePlayerDropdown()
+    PlayerDropdown:Refresh(GetPlayerNames(), true)
+end
+
+-- Обработчики событий
+LocalPlayer.CharacterAdded:Connect(function(character)
+    character:WaitForChild("HumanoidRootPart")
+    UpdateTeleportPartPosition()
+    if speedEnabled then
+        character:WaitForChild("Humanoid")
+        SetPlayerSpeed()
+    end
+end)
+
+Players.PlayerAdded:Connect(function(player)
+    UpdatePlayerDropdown()
+    if highlightAllEnabled then
+        AddHighlightToPlayer(player)
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    UpdatePlayerDropdown()
+    RemoveHighlightFromPlayer(player)
+end)
+
+-- Инициализация
+UpdatePlayerDropdown()
+if LocalPlayer.Character then
+    UpdateTeleportPartPosition()
+end
+
+-- Применяем Highlight к уже существующим игрокам при запуске
+if highlightAllEnabled then
+    for _, player in ipairs(Players:GetPlayers()) do
+        AddHighlightToPlayer(player)
+    end
+end
+
+OrionLib:Init()
