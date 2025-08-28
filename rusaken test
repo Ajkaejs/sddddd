@@ -3,7 +3,7 @@ local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local TeleportService = game:GetService("TeleportService")
-local OrionLib = loadstring(game:HttpGet('https://raw.githubusercontent.com/Ajkaejs/Orion-2/refs/heads/main/source'))()
+local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Ajkaejs/Orion-2/refs/heads/main/source"))()
 
 -- Создаем главное окно GUI
 local Window = OrionLib:MakeWindow({
